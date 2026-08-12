@@ -479,6 +479,10 @@ function get_secret(
 
     if ($httpCode !== 200) {
 
+        if ($httpCode === 404 && $default !== '') {
+            return $default;
+        }
+
         $detalle =
             $response;
 
