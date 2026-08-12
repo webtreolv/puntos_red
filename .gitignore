@@ -1,0 +1,8 @@
+# Ignorar archivos de variables de entorno y credenciales
+.env
+*.env
+
+# Otras carpetas que no deben subirse
+/vendor/
+/node_modules/
+.DS_Store
