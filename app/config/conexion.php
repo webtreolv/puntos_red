@@ -545,11 +545,11 @@ function get_secret(
 
 if ($containerArgsString !== '') {
     define('DB_HOST', get_secret('DBHOST'));
-    define('DB_PORT', get_secret('DBPORT', '3306'));
+    define('DB_PORT', '3306');
     define('DB_USER', get_secret('DBUSER'));
     define('DB_PASSWORD', get_secret('DBPASSWORD'));
     define('DB_NAME', get_secret('DBNAME'));
-    define('DB_CHARSET', get_secret('DBCHARSET', 'utf8mb4'));
+    define('DB_CHARSET', 'utf8mb4');
 } else {
     define('DB_HOST', 'localhost');
     define('DB_PORT', '3306');
