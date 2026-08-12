@@ -48,3 +48,91 @@ El servicio de Azure debe inyectar las siguientes variables de entorno para que 
 * **`Dockerfile`**: Basado en `php:8.X-apache`, instalando las extensiones `mysqli` y `pdo_mysql`.
 * **Archivos Apache/PHP**: Un archivo de host virtual (`000-default.conf`) que defina la raíz del sitio web y un `php.ini` configurado para producción.
 * **`.dockerignore`**: Para omitir carpetas pesadas (como `.git/`, `node_modules/`, etc.) y acelerar el tiempo de construcción de la imagen en Azure Container Registry (ACR).
+
+---
+
+## 3. Comparación de Código: Local vs. Adaptación para Azure
+
+Para que esta arquitectura funcione de manera híbrida, el cambio principal ocurre en el archivo de base de datos (`conexion.php`). A continuación se muestra cómo era originalmente (limitado a entorno local) y cómo es la nueva adaptación.
+
+### A. Código Original (Local / XAMPP)
+Anteriormente, las credenciales se colocaban directamente en el código de conexión de manera fija.
+
+```php
+// conexion.php (Versión Local Clásica)
+define('DB_HOST', 'localhost');
+define('DB_USER', 'root');
+define('DB_PASSWORD', '');
+define('DB_NAME', 'puntos_red');
+define('DB_PORT', '3306');
+define('DB_CHARSET', 'utf8mb4');
+
+try {
+    $pdo = new PDO(
+        "mysql:host=" . DB_HOST . ";dbname=" . DB_NAME . ";charset=" . DB_CHARSET,
+        DB_USER,
+        DB_PASSWORD
+    );
+    $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
+} catch (PDOException $e) {
+    die("Error de conexión: " . $e->getMessage());
+}
+```
+
+### B. Código Adaptado (Híbrido: Local + Azure Key Vault)
+En la nueva versión, la aplicación busca primero si existe la variable `ContainerArgs`. Si la encuentra, solicita las credenciales seguras al Key Vault; de lo contrario, regresa a la configuración de XAMPP local.
+
+**Cambios específicos aplicados:**
+1. **Detección del Entorno:** El bloque `if ($containerArgsString !== '')` diferencia si estamos en Azure o en Local.
+2. **Key Vault:** Se integró la función `get_secret('...')` para que la contraseña y usuario se descarguen de manera segura (evitando credenciales hardcodeadas en producción).
+3. **Manejo de Errores HTTP:** Se modificó `get_secret` para que si ocurre un error 404, no detenga la app.
+4. **Constantes Fijas:** Se dejaron fijos el puerto (`3306`) y charset (`utf8mb4`) directamente en el bloque de Azure para omitir llamadas innecesarias al Key Vault que causaban errores `SecretNotFound`.
+5. **Certificado SSL:** Se le indicó explícitamente a PDO que use el certificado SSL (`MYSQL_ATTR_SSL_CA`) si detecta Azure, para asegurar la encriptación de datos.
+
+```php
+// conexion.php (Nueva Versión Adaptada)
+
+// 1. Detectar si estamos en Azure (existe la variable ContainerArgs)
+$containerArgsString = getenv('ContainerArgs') ?: '';
+
+if ($containerArgsString !== '') {
+    // ESTAMOS EN AZURE: Obtener credenciales del Key Vault
+    define('DB_HOST', get_secret('DBHOST'));
+    define('DB_USER', get_secret('DBUSER'));
+    define('DB_PASSWORD', get_secret('DBPASSWORD'));
+    define('DB_NAME', get_secret('DBNAME'));
+    
+    // Parámetros fijos para evitar consultar secretos inexistentes y errores 404
+    define('DB_PORT', '3306');
+    define('DB_CHARSET', 'utf8mb4');
+} else {
+    // ESTAMOS EN LOCAL (XAMPP): Usar credenciales estándar
+    define('DB_HOST', 'localhost');
+    define('DB_USER', 'root');
+    define('DB_PASSWORD', '');
+    define('DB_NAME', 'puntos_red');
+    define('DB_PORT', '3306');
+    define('DB_CHARSET', 'utf8mb4');
+}
+
+// 2. Conexión PDO aplicando certificado SSL si estamos en Azure
+try {
+    $dsn = "mysql:host=" . DB_HOST . ";port=" . DB_PORT . ";dbname=" . DB_NAME . ";charset=" . DB_CHARSET;
+    $opciones = [
+        PDO::ATTR_ERRMODE            => PDO::ERRMODE_EXCEPTION,
+        PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
+        PDO::ATTR_EMULATE_PREPARES   => false,
+    ];
+
+    // Si detectamos Azure, obligamos a usar el certificado local para encriptar
+    if ($containerArgsString !== '') {
+        $opciones[PDO::MYSQL_ATTR_SSL_CA] = __DIR__ . '/../DigiCertGlobalRootG2.crt.pem';
+        $opciones[PDO::MYSQL_ATTR_SSL_VERIFY_SERVER_CERT] = false;
+    }
+
+    $pdo = new PDO($dsn, DB_USER, DB_PASSWORD, $opciones);
+
+} catch (PDOException $e) {
+    die(json_encode(["success" => false, "mensaje" => "Error de conexión al servidor."]));
+}
+```
